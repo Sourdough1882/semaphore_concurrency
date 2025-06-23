@@ -3,45 +3,63 @@ from urllib.parse import urlencode
 from playwright.async_api import async_playwright
 
 
-base_url = 'https://avito.ru/all/bytovaya_elektronika'
-urls = [
-    f"{base_url}?{urlencode({'q': 'rtx 5070', 'p': i})}" for i in range(1, 20)]
+class WebsiteScreenshotter:
+    def __init__(self, context_parameters: dict, concurrency: int = 3) -> None:
+        self.semaphore = asyncio.Semaphore(concurrency)
+        self.context_parameters = context_parameters
+        self.playwright = None
+        self.browser = None
+        self.context = None
 
+    async def __aenter__(self):
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch()
+        self.context = await self.browser.new_context(**self.context_parameters)
+        return self
 
-semaphore = asyncio.Semaphore(3)
+    async def __aexit__(self, *args):
+        if self.playwright is not None:
+            await self.playwright.stop()
+        if self.browser is not None:
+            await self.browser.close()
+        if self.context is not None:
+            await self.context.close()
 
-
-async def screenshot_page(context, url: str, filepath: str):
-    async with semaphore:
-        page = await context.new_page()
-        await page.goto(url)
-        await page.wait_for_timeout(10000)
-        await page.screenshot(path=filepath, full_page=True)
-        await page.close()
+    async def screenshot(self, url):
+        async with self.semaphore:
+            if self.context is not None:
+                page = await self.context.new_page()
+                try:
+                    await page.goto(url)
+                    await page.screenshot(path=f"screenshot_{url}.jpg")
+                finally:
+                    await page.close()
 
 
 async def main():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:139.0)"
-            "Gecko/20100101 Firefox/139.0"
-        )
+    base_url = 'https://avito.ru/all/bytovaya_elektronika'
 
-        context.set_default_timeout(80000)
+    page_count = 21
 
-        count = 0
+    url_list = []
 
-        tasks = []
+    for count in range(1, page_count):
+        query_params: dict = {
+            'p': count,
+            'q': 'видеокарта rtx 5070'
+        }
 
-        for url in urls:
-            tasks.append(screenshot_page(
-                context, url, f"screenshots/screenshot_page_{count}.jpg"))
-            count += 1
+        query_string: str = urlencode(query_params)
+
+        url_list.append(f"{base_url}?{query_string}")
+
+    context_parameters = {
+        'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    async with WebsiteScreenshotter(context_parameters=context_parameters, concurrency=3) as screenshotter:
+        tasks = [screenshotter.screenshot(url) for url in url_list]
 
         await asyncio.gather(*tasks)
-
-        await browser.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
